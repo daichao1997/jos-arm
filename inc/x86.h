@@ -110,7 +110,7 @@ invlpg(void *addr)
 {
 	asm volatile("invlpg (%0)" : : "r" (addr) : "memory");
 }
-
+/*
 static inline void
 lidt(void *p)
 {
@@ -260,5 +260,5 @@ xchg(volatile uint32_t *addr, uint32_t newval)
 		     : "cc");
 	return result;
 }
-
+*/
 #endif /* !JOS_INC_X86_H */

@@ -41,8 +41,8 @@ _start = RELOC(entry)
 
 .globl entry
 entry:
-	mov		r0, #0x1234
-	mov		r1, #0x472
+	ldrh	r0, =0x1234
+	ldrh	r1, =0x472
 	strh	r0, [r1]			// warm boot
 
 	// We haven't set up virtual memory yet, so we're running from
@@ -56,33 +56,34 @@ entry:
 
 	// Load the physical address of entry_pgdir into cr3.  entry_pgdir
 	// is defined in entrypgdir.c.
-	movl	$(RELOC(entry_pgdir)), %eax
-	movl	%eax, %cr3
+	ldr		r0, =(RELOC(entry_pgdir))
+	mcr		p15, 0, r0, c2, c0, 0
 	// Turn on paging.
-	movl	%cr0, %eax
-	orl	$(CR0_PE|CR0_PG|CR0_WP), %eax
-	movl	%eax, %cr0
+	mrc 	p15, 0, r0, c1, c0, 0
+	orr		r0, r0, #1
+	mcr 	p15, 0, r0, c1, c0, 0
 
 	// Now paging is enabled, but we're still running at a low EIP
 	// (why is this okay?).  Jump up above KERNBASE before entering
 	// C code.
-	mov	$relocated, %eax
-	jmp	*%eax
+	ldr 	r0, #relocated
+	bx		r0
 relocated:
 
 	// Clear the frame pointer register (EBP)
 	// so that once we get into debugging C code,
 	// stack backtraces will be terminated properly.
-	movl	$0x0,%ebp			// nuke frame pointer
+	mov		fp, #0			// nuke frame pointer
 
 	// Set the stack pointer
-	movl	$(bootstacktop),%esp
+	//movl	$(bootstacktop),%esp
+	ldr 	sp, =bootstacktop
 
 	// now to C code
-	call	i386_init
+	b		i386_init
 
 	// Should never get here, but in case we do, just spin.
-spin:	jmp	spin
+spin:	b	spin
 
 
 .data
