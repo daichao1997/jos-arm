@@ -41,10 +41,11 @@ _start = RELOC(entry)
 
 .globl entry
 entry:
-	ldrh	r0, =0x1234
-	ldrh	r1, =0x472
-	strh	r0, [r1]			// warm boot
-
+	// Prevent race condition between processors
+	// Only let CPU 0 go on executing
+	mrc		p15, 0, r0, c0, c0, 5
+	tst		r0, #3
+	bne		halt
 	// We haven't set up virtual memory yet, so we're running from
 	// the physical address the boot loader loaded the kernel at: 1MB
 	// (plus a few bytes).  However, the C code is linked to run at
@@ -58,16 +59,18 @@ entry:
 	// is defined in entrypgdir.c.
 	ldr		r0, =(RELOC(entry_pgdir))
 	mcr		p15, 0, r0, c2, c0, 0
+	// No privilege check for memory access
+	mov		r0, #0xFFFFFFFF
+	mcr		p15, 0, r0, c3, c0, 0
 	// Turn on paging.
 	mrc 	p15, 0, r0, c1, c0, 0
 	orr		r0, r0, #1
 	mcr 	p15, 0, r0, c1, c0, 0
-
 	// Now paging is enabled, but we're still running at a low EIP
 	// (why is this okay?).  Jump up above KERNBASE before entering
 	// C code.
-	ldr 	r0, #relocated
-	bx		r0
+	ldr 	lr, =relocated
+	bx		lr
 relocated:
 
 	// Clear the frame pointer register (EBP)
@@ -80,12 +83,15 @@ relocated:
 	ldr 	sp, =bootstacktop
 
 	// now to C code
-	b		i386_init
+	b		arm_init
 
 	// Should never get here, but in case we do, just spin.
 spin:	b	spin
 
-
+halt:
+	wfe
+	b halt
+	
 .data
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // boot stack

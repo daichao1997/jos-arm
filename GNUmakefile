@@ -33,15 +33,26 @@ TOP = .
 
 # try to infer the correct GCCPREFIX
 ifndef GCCPREFIX
-GCCPREFIX := "arm-linux-gnueabi-"
+GCCPREFIX := $(shell if i386-jos-elf-objdump -i 2>&1 | grep '^elf32-i386$$' >/dev/null 2>&1; \
+	then echo 'i386-jos-elf-'; \
+	elif objdump -i 2>&1 | grep 'elf32-i386' >/dev/null 2>&1; \
+	then echo ''; \
+	else echo "***" 1>&2; \
+	echo "*** Error: Couldn't find an i386-*-elf version of GCC/binutils." 1>&2; \
+	echo "*** Is the directory with i386-jos-elf-gcc in your PATH?" 1>&2; \
+	echo "*** If your i386-*-elf toolchain is installed with a command" 1>&2; \
+	echo "*** prefix other than 'i386-jos-elf-', set your GCCPREFIX" 1>&2; \
+	echo "*** environment variable to that prefix and run 'make' again." 1>&2; \
+	echo "*** To turn off this error, run 'gmake GCCPREFIX= ...'." 1>&2; \
+	echo "***" 1>&2; exit 1; fi)
 endif
 
 # try to infer the correct QEMU
 ifndef QEMU
 QEMU := $(shell if which qemu >/dev/null 2>&1; \
 	then echo qemu; exit; \
-        elif which qemu-system-arm >/dev/null 2>&1; \
-        then echo qemu-system-arm; exit; \
+        elif which qemu-system-i386 >/dev/null 2>&1; \
+        then echo qemu-system-i386; exit; \
 	else \
 	qemu=/Applications/Q.app/Contents/MacOS/i386-softmmu.app/Contents/MacOS/i386-softmmu; \
 	if test -x $$qemu; then echo $$qemu; exit; fi; fi; \
@@ -75,7 +86,7 @@ PERL	:= perl
 CFLAGS := $(CFLAGS) $(DEFS) $(LABDEFS) -O1 -fno-builtin -I$(TOP) -MD
 CFLAGS += -fno-omit-frame-pointer
 CFLAGS += -std=gnu99
-CFLAGS += -Wall -Wno-format -Wno-unused -Werror -gstabs
+CFLAGS += -Wall -Wno-format -Wno-unused -Werror -gstabs -marm
 # -fno-tree-ch prevented gcc from sometimes reordering read_ebp() before
 # mon_backtrace()'s function prologue on gcc version: (Debian 4.7.2-5) 4.7.2
 CFLAGS += -fno-tree-ch
@@ -84,7 +95,9 @@ CFLAGS += -fno-tree-ch
 CFLAGS += $(shell $(CC) -fno-stack-protector -E -x c /dev/null >/dev/null 2>&1 && echo -fno-stack-protector)
 
 # Common linker flags
-LDFLAGS := -m armelf_linux_eabi
+# LDFLAGS := -m elf_i386
+LDFLAGS := -m armelf
+
 
 # Linker flags for JOS user programs
 ULDFLAGS := -T user/user.ld
@@ -123,20 +136,22 @@ $(OBJDIR)/.vars.%: FORCE
 
 
 # Include Makefrags for subdirectories
-include boot/Makefrag
-include kern/Makefrag
+# include boot/Makefrag
+ include kern/Makefrag
 
 
-QEMUOPTS = -drive file=$(OBJDIR)/kern/kernel.img,index=0,media=disk,format=raw -serial mon:stdio -gdb tcp::$(GDBPORT)
+# QEMUOPTS = -drive file=$(OBJDIR)/kern/kernel.img,index=0,media=disk,format=raw -serial mon:stdio -gdb tcp::$(GDBPORT)
+QEMUOPTS = -kernel $(OBJDIR)/kern/kernel -m 256 -M raspi2 -serial mon:stdio -gdb tcp::$(GDBPORT)
+
 QEMUOPTS += $(shell if $(QEMU) -nographic -help | grep -q '^-D '; then echo '-D qemu.log'; fi)
-IMAGES = warn $(OBJDIR)/kern/kernel.img
+IMAGES = warn $(OBJDIR)/kern/kernel
 QEMUOPTS += $(QEMUEXTRA)
 
 .gdbinit: .gdbinit.tmpl
 	sed "s/localhost:1234/localhost:$(GDBPORT)/" < $^ > $@
 
 gdb: warn
-	gdb -n -x .gdbinit
+	arm-none-eabi-gdb -n -x .gdbinit
 
 pre-qemu: .gdbinit
 
@@ -296,7 +311,6 @@ warn:
 	echo "this is the 2016 6.828 lab"; \
 	echo "******* WARNING ********* [39m"; \
 	echo; \
-#	false;
 
 #handin-prep:
 #	@./handin-prep

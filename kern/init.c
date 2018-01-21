@@ -20,7 +20,7 @@ test_backtrace(int x)
 }
 
 void
-i386_init(void)
+arm_init(void)
 {
 	extern char edata[], end[];
 
