@@ -1,0 +1,60 @@
+JOS ARM移植实验报告
+1400011714 代超
+计算机系
+【介绍】
+为了增进对JOS的了解，了解更多的体系结构，我将JOS从Intel X86平台移植到了ARM。由于ARM的中断控制太过复杂，我只移植了Lab1和Lab2的部分，也就是系统启动和内存管理。
+由于我之前对ARM体系了解非常少，并且有其他两门课的大作业一同在1月22日截止，因此我不得不大量参考陈一茹师姐的报告和代码，才及时完成了这个作业：https://github.com/Ireneruru/JOS-on-Arm。在此感谢陈一茹师姐。
+【环境配置】
+观察GNUMakefile可以发现，GCCPREFIX指定了编译JOS的GCC种类，默认情况下是本机自带的GCC。我的机器是X86的，因此自带的GCC只会把C代码编译成X86指令。经查询，我了解到需要安装交叉编译器，例如arm-linux-gnueabi-gcc和arm-none-eabi-gcc。经证实，前者无法完成编译，而后者可以，因此GCCPREFIX的值应为"arm-none-eabi-"。
+此外，QEMU作为硬件的模拟器，自然需要合适的配置。qemu-system-arm可以模拟ARM环境，但如果我们在Ubuntu上用apt-get安装它，得到的qemu-system-arm就不能支持raspi2机型了。因此最好通过QEMU的官方网站http://wiki.qemu.org/Main_Page下载源码，然后配置并安装。
+./configure --target-list=arm-softmmu --prefix=<prefix>
+make && sudo make install
+如果忽略prefix选项，那么qemu-system-arm就会安装到~/usr/local/bin/文件夹下。将GNUMakefile中的变量QEMU修改为刚才的安装路径，再为QEMU设置合适的启动选项（变量QEMUOPTS），我们就能用make qemu启动raspi2了。
+QEMUOPTS = -kernel $(OBJDIR)/kern/kernel -cpu arm1176 -m 256 -M raspi2 -serial stdio -gdb tcp::$(GDBPORT)
+【系统启动】
+raspi2的启动过程比较简单，它的启动代码直接写在了芯片上，不用像X86那样要先从BIOS读取bootloader。因此，我们不再需要boot文件夹下的代码。然而，目前的启动代码kern/entry.S根本不是用ARM指令集写的，不能正确make。我们先来修改这个文件。
+1. 只允许一个处理器执行启动代码
+Raspi2是多处理器的，为了防止竞争条件的产生，只允许0号CPU继续执行。
+// Prevent race condition between processors
+// Only let CPU 0 go on executing
+mrc		p15, 0, r0, c0, c0, 5
+tst		r0, #3
+bne		halt
+2. MMU的启动
+经查询手册，我发现ARM与i386的启动都有一些共同点，只不过具体的操作不同。它们都有一些专门用来控制MMU的寄存器，寄存器里都有一些位表示“是否开启分页”/“是否启用MMU”/“是否进行特权级检查”等等。我根据ARM手册的指示，将entry.S中控制MMU的代码改写成了ARM版本。
+// Load page directory
+ldr		r0, =(RELOC(entry_pgdir))
+mcr		p15, 0, r0, c2, c0, 0
+// No privilege check for memory access
+mov		r0, #0xFFFFFFFF
+mcr		p15, 0, r0, c3, c0, 0
+// Turn on paging.
+mrc 	p15, 0, r0, c1, c0, 0
+orr		r0, r0, #1
+mcr 	p15, 0, r0, c1, c0, 0
+
+3. 跳转到高的虚拟地址
+ldr 	lr, =relocated
+bx	lr
+
+4. 设置栈帧指针
+ARM中的栈指针为SP，帧指针为FP
+mov	fp, #0
+ldr 	sp, =bootstacktop
+b	arm_init
+
+【I/O初始化】
+从entry.S跳转到init.c中的arm_init后，jos-arm将执行类似的初始化操作：清零BSS段/初始化I/O/进入控制台，其中cons_init涉及控制台如何输入和输出。显然，ARM与i386的实现方法有所不同。这一部分过于复杂，因此我学习并参考了陈一茹的代码。以下引用的是陈一茹的报告：
+console.c中的API分为3层:
+最高一层:'High'-level console I/O. Used by readline and cprintf.这一层包含cputchar、getchar、iscons三个函数,是console.c提供给printf库的上层API接口。
+中间一层:General device-independent console code这一层包含了与具体设备无关(在JOS指屏幕、键盘或串口,它们在这一层被统一称作console)的I/O代码，对console缓冲区的管理、接受来自抽象设备console的中断、响应它的中断等工作。最高一层调用的是这一层的函数,这一层为最高一层提供了API接口。主要包含cons_init、cons_putc、cons_getc等函数。cons_intr这个函数比较特殊,它是一个向最底层开放的接口,提供一种通用的处理中断、更新缓冲区的 routine，最底层则向这层提供不同设备的中断处理 routine。注意，这些 “中断”本质上是一种轮询I/O(在getchar中对 con_getc 是无限循环调用,cons_getc调用不同的中断处理routine)。
+最底层:键盘、并口、串口、VGA等包含了向不同具体设备分发I/O任务、从不同具体设备接收中断并响应的代码。这一层向中间层提供了API接口。树莓派2中目前只有一种输入/输出设备，即UART串口。因此只要将UART串口一种设备包装进入上述范式即可。
+
+【系统控制台】
+这里主要得实现mon_backtrace，即显示回溯栈帧的结果。ARM的栈帧结构和i386有所不同。ARM的r11就存放着当前函数执行完后的返回地址，该地址之上又保存着旧的r11寄存器的内容。因此，只要不断顺着r11指示的方向回溯，就能实现类似于i386的mon_backtrace。
+方便起见，我们添加了inline函数read_r11，它模仿的是read_ebp。
+inline uint32_t read_r11(void) {
+	uint32_t r11;
+	asm volatile("mov %0, r11" : "=r" (r11));
+	return r11;
+}
